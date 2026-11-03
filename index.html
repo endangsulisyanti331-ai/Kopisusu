@@ -1,0 +1,355 @@
+
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SALMAN PRIVATE VAULT</title>
+<style>
+*{box-sizing:border-box}
+body{
+ margin:0;background:#080d19;color:white;
+ font-family:Arial,sans-serif;
+}
+header{
+ background:#111d32;padding:22px;
+ text-align:center;border-bottom:1px solid #263a57;
+}
+header h2{color:#39d5ff;margin:0}
+header p{color:#9aacc5;font-size:12px}
+.container{padding:20px;max-width:650px;margin:auto}
+.card{
+ background:#111d32;padding:20px;border-radius:16px;
+ border:1px solid #293b58;margin-bottom:17px;
+}
+input,button{
+ width:100%;padding:14px;border-radius:10px;
+ margin-top:10px;border:0;font-size:15px;
+}
+input{background:#202e45;color:white}
+button{
+ background:#08b9e9;color:#00131e;
+ font-weight:bold;cursor:pointer;
+}
+button:disabled{opacity:.5}
+.secondary{background:#293c59;color:white}
+.danger{background:#d94b5b;color:white}
+.hidden{display:none}
+.file{
+ background:#1a2940;padding:13px;border-radius:12px;
+ margin-top:12px;overflow-wrap:anywhere;
+}
+.file small{color:#aabbd1}
+.row{display:flex;gap:8px}
+.row button{flex:1;font-size:12px}
+.progress{
+ background:#27364d;height:9px;border-radius:20px;
+ margin-top:15px;overflow:hidden;
+}
+.bar{height:100%;background:#08d7a0;width:0%}
+#message{color:#50dfb0;font-size:13px}
+.stats{color:#9bb2cf;font-size:13px}
+</style>
+</head>
+<body>
+
+<header>
+<h2>🔐 SALMAN PRIVATE VAULT</h2>
+<p>PERSONAL PHOTO & VIDEO STORAGE</p>
+</header>
+
+<div class="container">
+
+<!-- LOGIN -->
+<div id="login" class="card">
+<h3>🔒 Brankas Pribadi</h3>
+<p>Buat kata sandi atau masukkan kata sandi Anda.</p>
+<input type="password" id="password"
+placeholder="Masukkan kata sandi">
+<button onclick="unlock()">BUKA BRANKAS</button>
+<p id="message"></p>
+</div>
+
+<!-- VAULT -->
+<div id="vault" class="hidden">
+
+<div class="card">
+<h3>👑 SALMAN PRIVATE VAULT</h3>
+<p class="stats" id="stats">Menghitung penyimpanan...</p>
+<button onclick="document.getElementById('picker').click()">
++ TAMBAHKAN FOTO / VIDEO
+</button>
+<input type="file" id="picker" multiple
+accept="image/*,video/*" class="hidden"
+onchange="uploadFiles(this.files)">
+<div class="progress">
+<div class="bar" id="bar"></div>
+</div>
+<p id="status" class="stats">Siap digunakan.</p>
+</div>
+
+<div class="card">
+<h3>📁 FILE TERSIMPAN</h3>
+<div id="files"></div>
+</div>
+
+<button class="danger" onclick="lockVault()">
+KUNCI BRANKAS
+</button>
+</div>
+
+</div>
+
+<script>
+const DBNAME="SalmanPrivateVault";
+const CHUNK=4*1024*1024;
+let db,key=null;
+
+function openDB(){
+ return new Promise((resolve,reject)=>{
+  let r=indexedDB.open(DBNAME,1);
+  r.onupgradeneeded=()=>{
+   let d=r.result;
+   d.createObjectStore("settings");
+   d.createObjectStore("files",{keyPath:"id"});
+   d.createObjectStore("chunks",{keyPath:"id"});
+  };
+  r.onsuccess=()=>resolve(r.result);
+  r.onerror=()=>reject(r.error);
+ });
+}
+
+function request(store,mode,action){
+ return new Promise((resolve,reject)=>{
+  let tx=db.transaction(store,mode);
+  let req=action(tx.objectStore(store));
+  req.onsuccess=()=>resolve(req.result);
+  req.onerror=()=>reject(req.error);
+ });
+}
+
+function get(store,id){
+ return request(store,"readonly",s=>s.get(id));
+}
+function put(store,value){
+ return request(store,"readwrite",s=>s.put(value));
+}
+function remove(store,id){
+ return request(store,"readwrite",s=>s.delete(id));
+}
+function all(store){
+ return request(store,"readonly",s=>s.getAll());
+}
+
+function randomBytes(n){
+ return crypto.getRandomValues(new Uint8Array(n));
+}
+
+async function derive(password,salt){
+ const material=await crypto.subtle.importKey(
+  "raw",new TextEncoder().encode(password),
+  "PBKDF2",false,["deriveKey"]
+ );
+ return crypto.subtle.deriveKey({
+  name:"PBKDF2",salt:salt,
+  iterations:310000,hash:"SHA-256"
+ },material,{name:"AES-GCM",length:256},
+ false,["encrypt","decrypt"]);
+}
+
+async function unlock(){
+ try{
+  const password=document.getElementById("password").value;
+  if(password.length<8){
+   throw Error("Kata sandi minimal 8 karakter.");
+  }
+
+  db=await openDB();
+  let setting=await get("settings","vault");
+
+  if(!setting){
+   let salt=randomBytes(16);
+   key=await derive(password,salt);
+   let iv=randomBytes(12);
+   let check=await crypto.subtle.encrypt(
+    {name:"AES-GCM",iv},key,
+    new TextEncoder().encode("SALMAN_VAULT_OK")
+   );
+   await put("settings",{
+    id:"vault",salt:Array.from(salt),
+    iv:Array.from(iv),check:Array.from(new Uint8Array(check))
+   });
+  }else{
+   key=await derive(password,new Uint8Array(setting.salt));
+   let decrypted=await crypto.subtle.decrypt({
+    name:"AES-GCM",iv:new Uint8Array(setting.iv)
+   },key,new Uint8Array(setting.check));
+
+   if(new TextDecoder().decode(decrypted)!=="SALMAN_VAULT_OK"){
+    throw Error("Kata sandi salah!");
+   }
+  }
+
+  document.getElementById("login").classList.add("hidden");
+  document.getElementById("vault").classList.remove("hidden");
+  document.getElementById("password").value="";
+  await refresh();
+
+ }catch(e){
+  document.getElementById("message").textContent=e.message;
+ }
+}
+
+async function uploadFiles(selected){
+ try{
+  let list=Array.from(selected);
+  if(!list.length)return;
+
+  for(let file of list){
+   let id=crypto.randomUUID();
+   let total=Math.ceil(file.size/CHUNK);
+   let completed=0;
+
+   for(let i=0;i<total;i++){
+    let part=file.slice(i*CHUNK,
+       Math.min((i+1)*CHUNK,file.size));
+
+    let plain=await part.arrayBuffer();
+    let iv=randomBytes(12);
+
+    let encrypted=await crypto.subtle.encrypt(
+     {name:"AES-GCM",iv},key,plain
+    );
+
+    await put("chunks",{
+     id:id+"_"+i,iv:Array.from(iv),
+     data:encrypted
+    });
+
+    completed+=part.size;
+    document.getElementById("bar").style.width=
+      Math.round(completed/file.size*100)+"%";
+    document.getElementById("status").textContent=
+      "Mengenkripsi "+file.name;
+   }
+
+   await put("files",{
+    id:id,name:file.name,type:file.type,
+    size:file.size,total:total,date:Date.now()
+   });
+  }
+
+  document.getElementById("picker").value="";
+  document.getElementById("status").textContent=
+   "Semua file berhasil disimpan!";
+  document.getElementById("bar").style.width="0%";
+  await refresh();
+
+ }catch(e){
+  document.getElementById("status").textContent=
+   "Gagal: "+e.message;
+ }
+}
+
+async function downloadFile(id){
+ try{
+  let file=await get("files",id);
+  let parts=[];
+
+  for(let i=0;i<file.total;i++){
+   let chunk=await get("chunks",id+"_"+i);
+   let decrypted=await crypto.subtle.decrypt({
+    name:"AES-GCM",iv:new Uint8Array(chunk.iv)
+   },key,chunk.data);
+
+   parts.push(decrypted);
+  }
+
+  let blob=new Blob(parts,{type:file.type||"application/octet-stream"});
+  let url=URL.createObjectURL(blob);
+  let a=document.createElement("a");
+  a.href=url;a.download=file.name;
+  a.click();
+
+  setTimeout(()=>URL.revokeObjectURL(url),60000);
+ }catch(e){
+  alert("Gagal membuka file: "+e.message);
+ }
+}
+
+async function deleteFile(id){
+ if(!confirm("Hapus file ini secara permanen?"))return;
+ let file=await get("files",id);
+ for(let i=0;i<file.total;i++){
+  await remove("chunks",id+"_"+i);
+ }
+ await remove("files",id);
+ await refresh();
+}
+
+async function refresh(){
+ let files=await all("files");
+ let total=files.reduce((a,b)=>a+b.size,0);
+
+ document.getElementById("stats").textContent=
+  files.length+" file • "+formatSize(total);
+
+ let area=document.getElementById("files");
+ area.innerHTML="";
+
+ if(!files.length){
+  area.innerHTML="<p class='stats'>Belum ada file tersimpan.</p>";
+ }
+
+ files.forEach(f=>{
+  let div=document.createElement("div");
+  div.className="file";
+
+  let name=document.createElement("b");
+  name.textContent=(f.type.startsWith("video/")?"🎬 ":"🖼️ ")+f.name;
+
+  let info=document.createElement("small");
+  info.textContent=formatSize(f.size);
+
+  let row=document.createElement("div");
+  row.className="row";
+
+  let download=document.createElement("button");
+  download.textContent="DOWNLOAD";
+  download.onclick=()=>downloadFile(f.id);
+
+  let del=document.createElement("button");
+  del.className="danger";
+  del.textContent="HAPUS";
+  del.onclick=()=>deleteFile(f.id);
+
+  div.append(name,document.createElement("br"),info,row);
+  row.append(download,del);
+  area.append(div);
+ });
+
+ if(navigator.storage && navigator.storage.estimate){
+  let e=await navigator.storage.estimate();
+  document.getElementById("stats").textContent+=
+   " • Kuota browser: "+formatSize(e.quota||0);
+ }
+}
+
+function formatSize(bytes){
+ if(bytes===0)return "0 B";
+ let units=["B","KB","MB","GB","TB"];
+ let i=Math.floor(Math.log(bytes)/Math.log(1024));
+ return (bytes/Math.pow(1024,i)).toFixed(2)+" "+units[i];
+}
+
+function lockVault(){
+ key=null;
+ document.getElementById("vault").classList.add("hidden");
+ document.getElementById("login").classList.remove("hidden");
+ document.getElementById("message").textContent=
+  "Brankas telah dikunci.";
+}
+
+</script>
+</body>
+</html>
